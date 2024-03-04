@@ -35,11 +35,11 @@ std::vector<std::vector<std::string>> ExtractUnitInOrder(std::vector<std::string
 std::string ExtractStructureAddress(std::vector<std::string>& typeLines, std::map<std::string, std::string> &existingTypes);
 std::string ExtractType(std::string typeLine);
 int FindSubstr(std::string s, std::string substr);
-std::string SubstituteLocation(std::string locationStr, std::string oldValue, std::string newValue);
+std::string SubstituteLocation(std::string &locationStr, std::string oldValue, std::string newValue);
 
 int main()
 {
-    std::ifstream dwarfFile("C:\\Users\\borez\\Downloads\\custom_w_output");
+    std::ifstream dwarfFile("C:\\win_share1\\w_option_export");
     std::string line;
     std::vector<std::string> lines;
 
@@ -326,10 +326,12 @@ std::pair<std::string, std::string> ExtractNameLocation(std::vector<std::string>
             locationStr.replace(startIdx, std::string("struct_start_addr").size(), location);
         }
 
-        return std::make_pair(name, locationStr);
+        auto exactLoc = SubstituteLocation(locationStr, "DW_OP_addr: ", "0x");
+
+        return std::make_pair(name, exactLoc);
     }
 
-    return std::make_pair(name, location);
+    return std::make_pair(name, SubstituteLocation(location, "DW_OP_addr: ", "0x"));
 }
 
 std::string ExtractName(std::string nameLine)
@@ -465,9 +467,32 @@ int FindSubstr(std::string s, std::string substr)
     return -1;
 }
 
-std::string SubstituteLocation(std::string locationStr, std::string oldValue, std::string newValue)
+std::string SubstituteLocation(std::string &locationStr, std::string oldValue, std::string newValue)
 {
-    return "";
+    if (locationStr.size() < oldValue.size())
+    {
+        return locationStr;
+    }
+
+    int small = oldValue.size();
+    int start = 0;
+
+    auto ret = std::string(locationStr);
+
+    while (start + small <= ret.size())
+    {
+        if (ret.substr(start, small).compare(oldValue) == 0)
+        {
+            ret.replace(start, small, newValue);
+            start += small;
+        }
+        else
+        {
+            start++;
+        }
+    }
+
+    return ret;
 }
 
 
