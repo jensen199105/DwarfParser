@@ -25,21 +25,24 @@ typedef enum _DebugType
 std::map<std::string, std::vector<std::string>> SplitBlocks(std::vector<std::string>& lines, std::string token);
 std::string TrimString(std::string line);
 bool IsSubstr(std::string s, std::string sub);
-int FindToken(std::vector<std::string>& lines, std::string token, int times);
+int FindToken(const std::vector<std::string>& lines, std::string token, int times);
 std::pair<std::string, std::string> IdentifyTypes(std::vector<std::string> &typeLines, std::map<std::string,
-    std::string> &existingTypes);
+    std::string> &existingTypes, std::map<std::string, std::vector<std::string>> &existingStructTypes);
 std::pair<std::string, std::string> ExtractNameLocation(std::vector<std::string>& unit, std::map<std::string, std::string> &existingTypes);
 std::string ExtractLocation(std::string locationLine);
 std::string ExtractName(std::string nameLine);
-std::vector<std::vector<std::string>> ExtractUnitInOrder(std::vector<std::string>& lines, std::string token);
-std::string ExtractStructureAddress(std::vector<std::string>& typeLines, std::map<std::string, std::string> &existingTypes);
+std::vector<std::vector<std::string>> ExtractUnitInOrder(const std::vector<std::string>& lines, std::string token);
+std::string ExtractStructureAddress(const std::vector<std::string>& typeLines, std::map<std::string, std::vector<std::string>> &existingStructTypes);
 std::string ExtractType(std::string typeLine);
 int FindSubstr(std::string s, std::string substr);
 std::string SubstituteLocation(std::string &locationStr, std::string oldValue, std::string newValue);
+std::string ExtractRegisterLocation(std::string& locationStr);
+void WriteToCsv(std::string filePath, std::multimap<std::string, std::string> nameLocPairs);
+bool StartWith(const std::string& str, const std::string& sub);
 
 int main()
 {
-    std::ifstream dwarfFile("C:\\win_share1\\w_option_export");
+    std::ifstream dwarfFile("C:\\Users\\borez\\Downloads\\custom_w_output");
     std::string line;
     std::vector<std::string> lines;
 
@@ -57,6 +60,7 @@ int main()
     auto debugInfoSecKey = "Contents of the .debug_info section:";
 
     std::map<std::string, std::string> typeDic;
+    std::map<std::string, std::vector<std::string>> structTypeBlocks;
 
     if (blocks.find(debugTypesSecKey) != blocks.end())
     {
@@ -66,12 +70,30 @@ int main()
 
         for (auto it = compilationUnits.begin(); it != compilationUnits.end(); ++it)
         {
-            auto typePair = IdentifyTypes(*it, typeDic);
+            auto typePair = IdentifyTypes(*it, typeDic, structTypeBlocks);
+
+            if (StartWith(typePair.second, "DW_TAG_structure_type"))
+            {
+                structTypeBlocks[typePair.first] = *it;
+            }
+            else if (StartWith(typePair.second, "DW_TAG_typedef"))
+            {
+                auto originSignature = typePair.second.substr(std::string("DW_TAG_typedef").size(), 18);
+                if (structTypeBlocks.find(originSignature) != structTypeBlocks.end())
+                {
+                    structTypeBlocks[typePair.first] = structTypeBlocks[originSignature];
+                    typePair.second = typePair.second.replace(0, std::string("DW_TAG_typedef").size() + 18, "");
+                }
+            }
+
             typeDic.insert(typePair);
         }
     }
 
-    std::map<std::string, std::string> nameLocationPairs;
+    std::multimap<std::string, std::string> nameLocationPairs;
+    std::map<std::string, int> localVariableRepetitionCount;
+    int localCount = 0;
+    int globalCount = 0;
 
     if (blocks.find(debugInfoSecKey) != blocks.end())
     {
@@ -88,8 +110,30 @@ int main()
                 auto nameLocPair = ExtractNameLocation(it->second, typeDic);
                 nameLocationPairs.insert(nameLocPair);
             }
+
+            auto localVariableBlocks = SplitBlocks(it->second, "DW_TAG_formal_parameter");
+            
+            for (auto it = localVariableBlocks.begin(); it != localVariableBlocks.end(); ++it)
+            {
+                auto nameLocPair = ExtractNameLocation(it->second, typeDic);
+
+                if (localVariableRepetitionCount.find(nameLocPair.first) != localVariableRepetitionCount.end())
+                {
+                    localVariableRepetitionCount[nameLocPair.first]++;
+                    nameLocPair.first = nameLocPair.first + "_repeat_" + std::to_string(localVariableRepetitionCount[nameLocPair.first]);
+                }
+                else
+                {
+                    localVariableRepetitionCount[nameLocPair.first] = 0;
+                }
+
+                localCount++;
+                nameLocationPairs.insert(nameLocPair);
+            }
         }
     }
+
+    WriteToCsv("customer_nameloc.csv", nameLocationPairs);
 
     return 0;
 }
@@ -167,7 +211,7 @@ bool IsSubstr(std::string s, std::string sub)
     return false;
 }
 
-int FindToken(std::vector<std::string>& lines, std::string token, int times)
+int FindToken(const std::vector<std::string>& lines, std::string token, int times)
 {
     auto realTimes = 0;
     auto it = lines.begin();
@@ -187,7 +231,7 @@ int FindToken(std::vector<std::string>& lines, std::string token, int times)
     return -1;
 }
 
-std::pair<std::string, std::string> IdentifyTypes(std::vector<std::string>& typeLines, std::map<std::string, std::string> &existingTypes)
+std::pair<std::string, std::string> IdentifyTypes(std::vector<std::string>& typeLines, std::map<std::string, std::string> &existingTypes, std::map<std::string, std::vector<std::string>> &structTypeBlocks)
 {
     auto ret = std::pair<std::string, std::string>();
     // find Signature first 
@@ -230,7 +274,7 @@ std::pair<std::string, std::string> IdentifyTypes(std::vector<std::string>& type
 
                             if (existingTypes.find(originalSignature) != existingTypes.end())
                             {
-                                return std::make_pair(signature, existingTypes[originalSignature]);
+                                return std::make_pair(signature, "DW_TAG_typedef" + originalSignature + existingTypes[originalSignature]);
                             }
                         }
                     }
@@ -267,7 +311,7 @@ std::pair<std::string, std::string> IdentifyTypes(std::vector<std::string>& type
                             }
                         }
                     }
-                    else if (typeStr.substr(0, 14) == "User TAG value")
+                    else if (StartWith(typeStr, "User TAG value"))
                     {
                         int secondSignature = FindToken(typeLines, "signature", 1);
 
@@ -287,7 +331,7 @@ std::pair<std::string, std::string> IdentifyTypes(std::vector<std::string>& type
                     }
                     else if (typeStr == "DW_TAG_structure_type")
                     {
-                        auto structureAddr = ExtractStructureAddress(typeLines, existingTypes);
+                        auto structureAddr = ExtractStructureAddress(typeLines, structTypeBlocks);
 
                         return std::make_pair(signature, "DW_TAG_structure_type: " + structureAddr);
                     }
@@ -315,7 +359,7 @@ std::pair<std::string, std::string> ExtractNameLocation(std::vector<std::string>
     auto location = ExtractLocation(locationLine);
     auto type = ExtractType(typeLine);
 
-    if (existingTypes.find(type) != existingTypes.end() && IsSubstr(existingTypes[type], "DW_TAG_structure_type"))
+    if (existingTypes.find(type) != existingTypes.end() && StartWith(existingTypes[type], "DW_TAG_structure_type"))
     {
         auto locationStr = std::string(existingTypes[type]);
 
@@ -327,10 +371,12 @@ std::pair<std::string, std::string> ExtractNameLocation(std::vector<std::string>
         }
 
         auto exactLoc = SubstituteLocation(locationStr, "DW_OP_addr: ", "0x");
-
+        exactLoc = SubstituteLocation(exactLoc, "DW_OP_plus_uconst: ", "base+");
+        
         return std::make_pair(name, exactLoc);
     }
 
+    location = ExtractRegisterLocation(location);
     return std::make_pair(name, SubstituteLocation(location, "DW_OP_addr: ", "0x"));
 }
 
@@ -369,7 +415,7 @@ std::string ExtractType(std::string typeLine)
     return typeLine.substr(colonIdx + 2, typeLine.size() - colonIdx - 2);
 }
 
-std::vector<std::vector<std::string>> ExtractUnitInOrder(std::vector<std::string>& lines, std::string token)
+std::vector<std::vector<std::string>> ExtractUnitInOrder(const std::vector<std::string>& lines, std::string token)
 {
     std::vector<std::vector<std::string>> compilationUnits;
     auto start = lines.begin();
@@ -399,7 +445,7 @@ std::vector<std::vector<std::string>> ExtractUnitInOrder(std::vector<std::string
 * output: member:addr member:addr ... member:addr
 *
 */
-std::string ExtractStructureAddress(std::vector<std::string>& typeLines, std::map<std::string, std::string>& existingTypes)
+std::string ExtractStructureAddress(const std::vector<std::string>& typeLines, std::map<std::string,std::vector<std::string>>& existingStructTypes)
 {
     auto units = ExtractUnitInOrder(typeLines, "DW_TAG_member");
     auto ret = std::string("");
@@ -416,9 +462,30 @@ std::string ExtractStructureAddress(std::vector<std::string>& typeLines, std::ma
 
             auto name = nameLine.substr(colonIdx + 2, nameLine.size() - colonIdx - 2);
 
+            // search for signature to decide if this is a nested struct
+            std::string structSignature;
+
+            int secondSignature = FindToken(typeLines, "signature", 1);
+
+            if (secondSignature != -1)
+            {
+                auto orignalTypeLine = typeLines[secondSignature];
+
+                int colonIdx = orignalTypeLine.find_last_of(":");
+
+                structSignature = orignalTypeLine.substr(colonIdx + 2, 18);
+            }
+
             if (it == units.begin())
             {
-                ret += name + ":" + "struct_start_addr ";
+                if (existingStructTypes.find(structSignature) != existingStructTypes.end())
+                {
+                    ret += name + ":" + ExtractStructureAddress(existingStructTypes[structSignature], existingStructTypes);
+                }
+                else
+                {
+                    ret += name + ":" + "struct_start_addr ";
+                }
             }
             else
             {
@@ -434,7 +501,14 @@ std::string ExtractStructureAddress(std::vector<std::string>& typeLines, std::ma
                     {
                         auto locationStr = locationLine.substr(startBrace - locationLine.begin() + 1, endBrace - startBrace - 1);
 
-                        ret += name + ":" + locationStr + " ";
+                        if (existingStructTypes.find(structSignature) != existingStructTypes.end())
+                        {
+                            ret += name + ":" + locationStr + " " + ExtractStructureAddress(existingStructTypes[structSignature], existingStructTypes);
+                        }
+                        else
+                        {
+                            ret += name + ":" + locationStr + " ";
+                        }
                     }
                 }
             }
@@ -484,7 +558,7 @@ std::string SubstituteLocation(std::string &locationStr, std::string oldValue, s
         if (ret.substr(start, small).compare(oldValue) == 0)
         {
             ret.replace(start, small, newValue);
-            start += small;
+            start += newValue.size();
         }
         else
         {
@@ -493,6 +567,55 @@ std::string SubstituteLocation(std::string &locationStr, std::string oldValue, s
     }
 
     return ret;
+}
+
+std::string ExtractRegisterLocation(std::string& locationStr)
+{
+    int idx = 0;
+    // op code is DW_OP_reg 
+    if ((idx = FindSubstr(locationStr, "DW_OP_reg")) != -1)
+    {
+        auto openSign = locationStr.find_first_of("(");
+        auto endSign = locationStr.find_last_of(")");
+
+        return locationStr.substr(openSign + 1, endSign - openSign - 1);
+    }
+
+    // op code is DW_OP_breg 
+    if ((idx = FindSubstr(locationStr, "DW_OP_breg")) != -1)
+    {
+        auto openSign = locationStr.find_first_of("(");
+        auto endSign = locationStr.find_last_of(")");
+
+        auto reg = locationStr.substr(openSign + 1, endSign - openSign - 1);
+        auto offset = locationStr.substr(endSign + 2, locationStr.size() - endSign - 2);
+
+        return reg + offset;
+    }
+
+    return locationStr;
+}
+
+void WriteToCsv(std::string filePath, std::multimap<std::string, std::string> nameLocPairs)
+{
+    std::ofstream outFile(filePath, std::ofstream::out | std::ofstream::app);
+
+    for (auto it = nameLocPairs.begin(); it != nameLocPairs.end(); ++it)
+    {
+        outFile << it->first << "," << it->second << "\n";
+    }
+
+    outFile.close();
+}
+
+bool StartWith(const std::string& str, const std::string& sub)
+{
+    if (str.size() < sub.size())
+    {
+        return false;
+    }
+
+    return str.substr(0, sub.size()).compare(sub) == 0 ? true : false;
 }
 
 
